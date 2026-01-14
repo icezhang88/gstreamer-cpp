@@ -6,6 +6,22 @@
 #include <unistd.h>
 #include <ctime>  // 用于时间格式化
 
+// 系统检测宏定义
+#if defined(_WIN32) || defined(_WIN64)
+#define OS_WINDOWS 1
+#define OS_NAME "Windows"
+#elif defined(__linux__)
+#define OS_LINUX 1
+#define OS_NAME "Linux"
+#elif defined(__APPLE__) && defined(__MACH__)
+#define OS_MACOS 1
+#define OS_NAME "macOS"
+#else
+#define OS_UNKNOWN 1
+#define OS_NAME "Unknown"
+#endif
+
+using namespace std;
 static GMainLoop *main_loop = NULL;
 static GstElement *pipeline = NULL;
 static GstElement *textoverlay = NULL;  // 新增：保存文字叠加元素的引用
@@ -127,7 +143,7 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
     gst_element_set_start_time(pipeline, GST_CLOCK_TIME_NONE);
 
     // 创建视频元素
-    videosrc = gst_element_factory_make("ksvideosrc", "video-source");
+    videosrc = gst_element_factory_make("autovideosrc", "video-source");
     videoconvert = gst_element_factory_make("videoconvert", "video-convert");
     videoscale = gst_element_factory_make("videoscale", "video-scale");
     capsfilter = gst_element_factory_make("capsfilter", "video-caps");
@@ -153,7 +169,7 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
     if (!videosrc || !videoconvert || !videoscale || !capsfilter || !textoverlay ||
         !videoencoder || !h264parse || !audiosrc || !audioconvert ||
         !audioresample || !audioencoder || !aacparse || !flvmux || !rtmpsink) {
-        g_printerr("无法创建所有GStreamer元素\n");
+        g_printerr("cant create GStreamer element\n");
         return NULL;
     }
 
@@ -294,6 +310,8 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
 }
 
 int main(int argc, char *argv[]) {
+
+    cout<<gst_version_string()<<endl;
     GstBus *bus;
     guint bus_watch_id;
     guint timeout_id;  // 新增：定时器ID
@@ -346,7 +364,7 @@ int main(int argc, char *argv[]) {
     g_main_loop_run(main_loop);
 
     // 清理资源
-    std::cout << "停止推流..." << std::endl;
+    std::cout << "stop push stream..." << std::endl;
 
     // 新增：移除定时器
     g_source_remove(timeout_id);
@@ -356,7 +374,7 @@ int main(int argc, char *argv[]) {
     g_source_remove(bus_watch_id);
     g_main_loop_unref(main_loop);
 
-    std::cout << "推流已停止" << std::endl;
+    std::cout << "push stopped" << std::endl;
 
     return 0;
 }
