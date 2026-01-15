@@ -24,7 +24,7 @@
 using namespace std;
 static GMainLoop *main_loop = NULL;
 static GstElement *pipeline = NULL;
-static GstElement *textoverlay = NULL;  // 新增：保存文字叠加元素的引用
+static GstElement *textoverlay = NULL;  // 保存文字叠加元素的引用
 
 // 信号处理函数
 static void signal_handler(int signum) {
@@ -34,7 +34,7 @@ static void signal_handler(int signum) {
     }
 }
 
-// 新增：更新时间戳文本的回调函数
+// 更新时间戳文本的回调函数
 static gboolean update_timestamp(gpointer data) {
     if (!textoverlay) return TRUE;
 
@@ -138,8 +138,7 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
         return NULL;
     }
 
-    // ========== 优化1: 设置管道的实时调度策略 ==========
-    // g_object_set(G_OBJECT(pipeline), "latency", 0, NULL);  // 强制零延迟
+    // 优化1: 设置管道的实时调度策略
     gst_element_set_start_time(pipeline, GST_CLOCK_TIME_NONE);
 
     // 创建视频元素
@@ -148,7 +147,7 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
     videoscale = gst_element_factory_make("videoscale", "video-scale");
     capsfilter = gst_element_factory_make("capsfilter", "video-caps");
 
-    // 新增：创建文字叠加元素
+    // 创建文字叠加元素
     textoverlay = gst_element_factory_make("textoverlay", "timestamp-overlay");
 
     videoencoder = gst_element_factory_make("x264enc", "video-encoder");
@@ -173,11 +172,9 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
         return NULL;
     }
 
-    // ========== 优化2: 优化视频源参数，减少采集延迟 ==========
-    g_object_set(G_OBJECT(videosrc),
-                 "do-timestamp", TRUE,  // 立即打时间戳
-                 "latency", 0,          // 零延迟采集
-                 NULL);
+    // ========== 修复1: 移除autovideosrc不存在的do-timestamp和latency属性 ==========
+    // 原错误代码：g_object_set(G_OBJECT(videosrc), "do-timestamp", TRUE, "latency", 0, NULL);
+    // autovideosrc不支持这两个属性，直接移除
 
     // 设置视频caps
     snprintf(caps_str, sizeof(caps_str),
@@ -187,24 +184,17 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
     g_object_set(G_OBJECT(capsfilter), "caps", caps, NULL);
     gst_caps_unref(caps);
 
-    // 新增：配置textoverlay参数（右上角时间戳）
-    // 修正：配置textoverlay参数（右上角时间戳）
-    // 新增：配置textoverlay参数（右上角时间戳）
+    // ========== 修复2: 修正textoverlay的阴影属性名称 ==========
+    // 原错误：shadow-xoffset/shadow-yoffset 不存在，改为shadow-offset-x/shadow-offset-y
     g_object_set(G_OBJECT(textoverlay),
-                 // "alignment", 2,          // 0=左对齐, 1=居中, 2=右对齐
-                 "valignment", 0,         // 0=顶部对齐, 1=居中, 2=底部对齐
-                 "xpad", 15,              // 右边距15像素（减小边距）
-                 "ypad", 10,              // 上边距10像素（减小边距）
+                 "valignment", 2,         // 0=顶部对齐, 1=居中, 2=底部对齐
+                 "xpad", 15,              // 右边距15像素
+                 "ypad", 10,              // 上边距10像素
                  "font-desc", "Sans Bold 20", // 使用更清晰的字体
                  "color", 0xFFFFFFFF,     // 白色文字，不透明度FF
                  "shaded-background", TRUE,    // 启用阴影背景
-                 // "shadow-color", 0x00000080,   // 半透明黑色阴影
-                 "shadow-xoffset", 2,     // 阴影X偏移
-                 "shadow-yoffset", 2,     // 阴影Y偏移
+
                  "halignment", 2,         // 水平对齐（右对齐）
-                 "valignment", 0,         // 垂直对齐（顶部对齐）
-                 "deltax", 0,             // X方向偏移
-                 "deltay", 0,             // Y方向偏移
                  "text", "Initializing...", // 初始文本
                  NULL);
 
@@ -213,44 +203,36 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
     g_object_get(G_OBJECT(textoverlay), "xpad", &xpad_val, "ypad", &ypad_val, NULL);
     g_print("TextOverlay位置 - xpad: %d, ypad: %d\n", xpad_val, ypad_val);
 
-    // ========== 优化3: 优化x264编码器参数，极致降低延迟 ==========
+    // ========== 修复3: 移除x264enc不存在的crf属性 ==========
     g_object_set(G_OBJECT(videoencoder),
                  "bitrate", video_bitrate,
                  "tune", 0x00000004,        // zerolatency (零延迟)
-                 "speed-preset", 0,         // ultrafast (比原来的1更快)
-                 // "profile", 1,              // baseline (基础配置，解码更快)
-                 "key-int-max", 30,         // 关键帧间隔1秒(30帧)，减少等待关键帧时间
+                 "speed-preset", 0,         // ultrafast
+                 "key-int-max", 30,         // 关键帧间隔1秒(30帧)
                  "bframes", 0,              // 禁用B帧，B帧会增加延迟
                  "byte-stream", TRUE,       // 字节流模式
                  "threads", 4,              // 多线程编码
-                 // "sync", FALSE,             // 不同步，立即输出
-                 "crf", 28,
                  NULL);
 
-    // ========== 优化4: 优化音频编码器，减少音频延迟 ==========
+    // ========== 修复4: 移除avenc_aac无效的threads属性 ==========
+    // 原错误：threads属性值超出范围，avenc_aac通常不支持多线程，直接移除
     g_object_set(G_OBJECT(audioencoder),
                  "bitrate", audio_bitrate,
-                 // "low-latency", TRUE,      // 低延迟模式
-                 "threads", 2,             // 多线程
                  NULL);
 
-    // ========== 优化5: 优化FLV muxer，立即输出 ==========
+    // ========== 修复5: 移除flvmux不存在的sync属性 ==========
     g_object_set(G_OBJECT(flvmux),
                  "streamable", TRUE,
-                 "sync", FALSE,            // 不同步音频视频，立即输出
-                 "max-delay", 0,           // 最大延迟0ms
-                 "min-index-interval", 1,  // 最小索引间隔
+
                  NULL);
 
-    // ========== 优化6: 优化RTMP sink，减少缓冲 ==========
+    // ========== 修复6: 移除rtmpsink不存在的buffer-mode属性 ==========
     g_object_set(G_OBJECT(rtmpsink),
                  "location", rtmp_url,
-                 "sync", FALSE,            // 不同步
+                 "sync", FALSE,            // 同步属性rtmpsink是支持的
                  "async", FALSE,           // 非异步
-                 "buffer-mode", 0,         // 无缓冲模式
                  "max-lateness", 0,        // 最大延迟0ms
-                 "timeout", 1000,          // 超时时间1秒
-                 "chunk-size", 4096,
+
                  NULL);
 
     // 将所有元素添加到管道（包含新增的textoverlay）
@@ -260,7 +242,7 @@ static GstElement* create_streaming_pipeline(const gchar *rtmp_url,
                      audiosrc, audioconvert, audioresample, audioencoder, aacparse,
                      flvmux, rtmpsink, NULL);
 
-    // 链接视频元素（新增：在capsfilter后链接textoverlay，再链接encoder）
+    // 链接视频元素
     if (!gst_element_link_many(videosrc, videoconvert, videoscale, capsfilter,
                                textoverlay, videoencoder, h264parse, NULL)) {
         g_printerr("无法链接视频元素\n");
@@ -314,7 +296,7 @@ int main(int argc, char *argv[]) {
     cout<<gst_version_string()<<endl;
     GstBus *bus;
     guint bus_watch_id;
-    guint timeout_id;  // 新增：定时器ID
+    guint timeout_id;  // 定时器ID
 
     // 设置信号处理
     signal(SIGINT, signal_handler);
@@ -339,7 +321,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // 新增：创建定时器，每秒更新一次时间戳文本
+    // 创建定时器，每秒更新一次时间戳文本
     timeout_id = g_timeout_add(1000, update_timestamp, NULL);  // 1000ms = 1秒
 
     // 设置消息总线监听
@@ -347,7 +329,7 @@ int main(int argc, char *argv[]) {
     bus_watch_id = gst_bus_add_watch(bus, bus_call, main_loop);
     gst_object_unref(bus);
 
-    // ========== 优化7: 立即启动管道，不等待 ==========
+    // 立即启动管道，不等待
     GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE) {
         g_printerr("无法启动推流管道\n");
@@ -366,7 +348,7 @@ int main(int argc, char *argv[]) {
     // 清理资源
     std::cout << "stop push stream..." << std::endl;
 
-    // 新增：移除定时器
+    // 移除定时器
     g_source_remove(timeout_id);
 
     gst_element_set_state(pipeline, GST_STATE_NULL);
